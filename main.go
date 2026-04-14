@@ -39,9 +39,15 @@ var version = "1.0.0"
 
 // RunRequest is sent by the browser over the WebSocket.
 type RunRequest struct {
-	Source   string `json:"source"`   // C source text
-	Filename string `json:"filename"` // e.g. "hello.c"
-	Cmd      string `json:"cmd"`      // e.g. "gcc -std=c11 -Wall hello.c -o hello && ./hello"
+	Source   string    `json:"source"`   // Legacy single-file source text
+	Filename string    `json:"filename"` // Legacy single-file name, e.g. "hello.c"
+	Files    []RunFile `json:"files"`    // Structured lesson files for multi-file runs
+	Cmd      string    `json:"cmd"`      // e.g. "gcc -std=c11 -Wall hello.c -o hello && ./hello"
+}
+
+type RunFile struct {
+	Source   string `json:"source"`
+	Filename string `json:"filename"`
 }
 
 // RunMessage is streamed back to the browser.
@@ -158,8 +164,10 @@ func sanitizeFilename(name string) (string, error) {
 		return "", errInvalid("invalid filename")
 	}
 
-	if filepath.Ext(clean) != ".c" {
-		return "", errInvalid("filename must end with .c")
+	switch filepath.Ext(clean) {
+	case ".c", ".h", ".s":
+	default:
+		return "", errInvalid("filename must end with .c, .h, or .s")
 	}
 
 	return clean, nil
@@ -250,6 +258,45 @@ func validateRunArgs(args []string) error {
 	}
 
 	return nil
+}
+
+func materializeFiles(req RunRequest) ([]RunFile, error) {
+	if len(req.Files) > 0 {
+		files := make([]RunFile, 0, len(req.Files))
+		seen := make(map[string]struct{}, len(req.Files))
+		for _, file := range req.Files {
+			filename, err := sanitizeFilename(file.Filename)
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := seen[filename]; ok {
+				return nil, errInvalid("duplicate filename: " + filename)
+			}
+			if file.Source == "" {
+				return nil, errInvalid("empty source for " + filename)
+			}
+			seen[filename] = struct{}{}
+			files = append(files, RunFile{
+				Filename: filename,
+				Source:   file.Source,
+			})
+		}
+		return files, nil
+	}
+
+	if req.Source == "" {
+		return nil, errInvalid("no source provided")
+	}
+
+	filename, err := sanitizeFilename(req.Filename)
+	if err != nil {
+		return nil, err
+	}
+
+	return []RunFile{{
+		Filename: filename,
+		Source:   req.Source,
+	}}, nil
 }
 
 func validateCommandChain(raw string) ([][]string, error) {
@@ -367,11 +414,6 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 
 	var mu sync.Mutex
 
-	if req.Source == "" {
-		fail(conn, &mu, "no source provided", 1)
-		return
-	}
-
 	// Temp directory — cleaned up when the handler returns.
 	tmpDir, err := os.MkdirTemp("", "llc-run-*")
 	if err != nil {
@@ -380,21 +422,28 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	filename, err := sanitizeFilename(req.Filename)
-	if err != nil {
-		fail(conn, &mu, err.Error(), 1)
-		return
-	}
-
 	argvs, err := validateCommandChain(req.Cmd)
 	if err != nil {
 		fail(conn, &mu, err.Error(), 1)
 		return
 	}
 
-	srcPath := filepath.Join(tmpDir, filename)
-	if err := os.WriteFile(srcPath, []byte(req.Source), 0600); err != nil {
-		fail(conn, &mu, "cannot write source: "+err.Error(), 1)
+	files, err := materializeFiles(req)
+	if err != nil {
+		fail(conn, &mu, err.Error(), 1)
+		return
+	}
+
+	for _, file := range files {
+		srcPath := filepath.Join(tmpDir, file.Filename)
+		if err := os.WriteFile(srcPath, []byte(file.Source), 0600); err != nil {
+			fail(conn, &mu, "cannot write source: "+err.Error(), 1)
+			return
+		}
+	}
+
+	if len(files) == 0 {
+		fail(conn, &mu, "no source provided", 1)
 		return
 	}
 
