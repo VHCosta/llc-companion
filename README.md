@@ -7,7 +7,7 @@ Runs a tiny HTTP/WebSocket server on `127.0.0.1:27183`. The course app detects i
 ## What it does
 
 - Receives C source + a shell command from the course terminal
-- Writes the source to a temp directory, runs the command via `sh -c`
+- Writes the source to a temp directory and runs an allowlisted command chain
 - Streams stdout/stderr back line-by-line over WebSocket
 - 5-second timeout, 64 KB output cap, temp dir cleaned up after each run
 
@@ -82,5 +82,12 @@ The course app speaks to the companion over WebSocket at `ws://127.0.0.1:27183/r
 
 ## Security
 
-The companion only binds to `127.0.0.1` — it is not reachable from the network.
-Students run their own code on their own machine. No telemetry, no logging, no auth.
+The companion only binds to `127.0.0.1` and only accepts browser requests from
+approved origins. It does not execute arbitrary shell syntax: it only allows
+`gcc`/`clang`/`cc` compile commands plus `./binary` execution in the temp workdir.
+
+If you serve the course from another origin, set `LLC_ALLOWED_ORIGINS`:
+
+```bash
+LLC_ALLOWED_ORIGINS="https://example.com,http://localhost:4173" ./llc-companion
+```
