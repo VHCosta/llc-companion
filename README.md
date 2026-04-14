@@ -57,6 +57,9 @@ make all          # all platforms → dist/
 
 Requires Go 1.21+.
 
+The repo also ships a minimal GitHub Actions CI build (`go build ./...`) so
+clean-checkout regressions are caught before release packaging.
+
 ## Protocol
 
 The course app speaks to the companion over WebSocket at `ws://127.0.0.1:27183/run`.
